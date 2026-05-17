@@ -109,6 +109,7 @@ io.on('connection', (socket) => {
       hostId: userId,
       members: new Map([[userId, { username, role: 'host', joinedAt: new Date().toISOString() }]]),
       syncState: { isPlaying: false, currentTime: 0, playbackSpeed: 1, generation: 0, lastEventAt: Date.now() },
+      currentUrl: null,
       createdAt: new Date().toISOString(),
     };
     rooms.set(id, room);
@@ -139,7 +140,7 @@ io.on('connection', (socket) => {
     });
     socket.to(roomId).emit('chat:system', { text: `${username} odaya katıldı` });
     console.log(`[Room] ${username} joined ${room.name} (${room.code})`);
-    cb({ success: true, room: formatRoom(room), syncState: room.syncState });
+    cb({ success: true, room: formatRoom(room), syncState: room.syncState, currentUrl: room.currentUrl });
   });
 
   // ── Room Leave ──
@@ -193,6 +194,19 @@ io.on('connection', (socket) => {
   socket.on('sync:request-state', (data, cb) => {
     const room = rooms.get(data.roomId);
     if (room && cb) cb(room.syncState);
+  });
+
+  // ── URL Sync (anime link sharing) ──
+  socket.on('sync:url-changed', (data) => {
+    const room = rooms.get(data.roomId);
+    if (!room) return;
+    room.currentUrl = data.url;
+    console.log(`[Sync] URL changed in ${room.name}: ${data.url}`);
+    io.to(data.roomId).emit('sync:url-changed', {
+      url: data.url,
+      originUserId: userId,
+      serverTimestamp: Date.now(),
+    });
   });
 
   // ── Chat ──
