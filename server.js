@@ -209,6 +209,19 @@ io.on('connection', (socket) => {
     });
   });
 
+  // ── Polling Sync (time correction every 3s) ──
+  socket.on('sync:timecheck', (data) => {
+    const room = rooms.get(data.roomId);
+    if (!room) return;
+    // Broadcast to all OTHER members for drift correction
+    socket.to(data.roomId).emit('sync:timecheck', {
+      time: data.time,
+      playing: data.playing,
+      userId: userId,
+      serverTimestamp: Date.now(),
+    });
+  });
+
   // ── Chat ──
   socket.on('chat:message', (data) => {
     const msg = {
