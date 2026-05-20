@@ -59,51 +59,6 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/app', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// ── Proxy endpoint — fetch anime page, inject adapter.js ──
-app.get('/proxy', async (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl) return res.status(400).send('url parameter required');
-  try {
-    const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
-        'Referer': targetUrl,
-      },
-      redirect: 'follow',
-    });
-    const contentType = response.headers.get('content-type') || '';
-    // Only proxy HTML pages
-    if (!contentType.includes('text/html')) {
-      // For non-HTML (images, css, js etc), redirect to original
-      return res.redirect(targetUrl);
-    }
-    let html = await response.text();
-    // Get base URL for relative paths
-    const urlObj = new URL(targetUrl);
-    const baseUrl = urlObj.origin;
-    // Inject <base> tag so relative URLs resolve correctly
-    if (!html.includes('<base')) {
-      html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${baseUrl}/">`);
-    }
-    // Inject adapter.js before </body>
-    const adapterScript = `<script src="/adapter.js?t=${Date.now()}"></script>`;
-    if (html.includes('</body>')) {
-      html = html.replace('</body>', adapterScript + '</body>');
-    } else {
-      html += adapterScript;
-    }
-    // Remove X-Frame-Options and CSP from our response
-    res.removeHeader('X-Frame-Options');
-    res.removeHeader('Content-Security-Policy');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
-  } catch (err) {
-    console.error('[Proxy] Error:', err.message);
-    res.status(502).send(`<html><body style="background:#0a0a0f;color:#f87171;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;"><div style="text-align:center;"><h2>Site yüklenemedi</h2><p>${err.message}</p><p style="color:#888;font-size:12px;">${targetUrl}</p></div></body></html>`);
-  }
-});
 app.get('/app/*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // Health endpoint
