@@ -70,7 +70,7 @@
       renderChat();
       // Flash chat button
       var btn=document.getElementById('as-chat-btn');
-      if(btn&&!chatOpen){btn.style.background='rgba(236,72,153,0.5)';setTimeout(function(){btn.style.background='rgba(168,85,247,0.2)';},1500);}
+      if(btn&&!chatOpen){btn.style.background='rgba(16,185,129,0.5)';setTimeout(function(){btn.style.background='rgba(16,185,129,0.2)';},1500);}
     });
 
     // ── Start video search ──
@@ -162,29 +162,29 @@
     var root=document.createElement('div');root.id='anisync-root';
     root.innerHTML=
       '<div id="as-bar" style="position:fixed;top:0;left:0;right:0;z-index:999999;'
-      +'background:linear-gradient(180deg,rgba(10,10,15,0.97),rgba(10,10,15,0.92));'
+      +'background:linear-gradient(180deg,rgba(10,15,15,0.97),rgba(10,15,15,0.92));'
       +'backdrop-filter:blur(16px);padding:8px 12px;display:flex;align-items:center;gap:8px;'
-      +'border-bottom:2px solid rgba(168,85,247,0.5);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;'
+      +'border-bottom:2px solid rgba(16,185,129,0.5);font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;'
       +'box-shadow:0 4px 16px rgba(0,0,0,0.4);height:42px;">'
       +'<button id="as-back" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:2px 8px;line-height:1;">←</button>'
-      +'<span style="color:#a855f7;font-weight:800;font-size:13px;letter-spacing:0.5px;">AniSync</span>'
+      +'<span style="color:#10b981;font-weight:800;font-size:13px;letter-spacing:0.5px;">AniSync</span>'
       +'<span id="as-dot" style="width:7px;height:7px;border-radius:50%;background:#fbbf24;flex-shrink:0;"></span>'
       +'<span id="as-status" style="color:#888;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Bağlanıyor...</span>'
       +'<span style="flex:1"></span>'
       +'<span id="as-time" style="color:#fff;font-family:monospace;font-size:14px;font-weight:600;">0:00</span>'
-      +'<button id="as-chat-btn" style="background:rgba(168,85,247,0.2);border:1px solid rgba(168,85,247,0.4);'
+      +'<button id="as-chat-btn" style="background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.4);'
       +'border-radius:20px;color:#fff;padding:4px 12px;font-size:11px;cursor:pointer;white-space:nowrap;">💬 Chat</button>'
       +'</div>'
       +'<div id="as-chat" style="display:none;position:fixed;bottom:0;right:0;width:300px;max-height:55vh;z-index:999999;'
-      +'background:rgba(10,10,15,0.97);backdrop-filter:blur(16px);'
-      +'border-top:1px solid rgba(168,85,247,0.3);border-left:1px solid rgba(168,85,247,0.3);'
+      +'background:rgba(10,15,15,0.97);backdrop-filter:blur(16px);'
+      +'border-top:1px solid rgba(16,185,129,0.3);border-left:1px solid rgba(16,185,129,0.3);'
       +'border-radius:16px 0 0 0;font-family:-apple-system,sans-serif;flex-direction:column;">'
-      +'<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.08);font-size:13px;color:#a855f7;font-weight:700;">💬 Sohbet</div>'
+      +'<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.08);font-size:13px;color:#10b981;font-weight:700;">💬 Sohbet</div>'
       +'<div id="as-msgs" style="flex:1;overflow-y:auto;padding:10px;max-height:35vh;font-size:12px;color:#ccc;"></div>'
       +'<div style="padding:8px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:6px;">'
       +'<input id="as-input" placeholder="Mesaj yaz..." style="flex:1;background:rgba(255,255,255,0.08);'
       +'border:1px solid rgba(255,255,255,0.12);border-radius:20px;padding:8px 14px;color:#fff;font-size:12px;outline:none;">'
-      +'<button id="as-send" style="background:#a855f7;border:none;border-radius:50%;color:#fff;width:32px;height:32px;font-size:14px;cursor:pointer;">→</button>'
+      +'<button id="as-send" style="background:#10b981;border:none;border-radius:50%;color:#fff;width:32px;height:32px;font-size:14px;cursor:pointer;">→</button>'
       +'</div></div>';
     document.body.appendChild(root);
 
@@ -199,7 +199,7 @@
     document.getElementById('as-chat-btn').onclick=function(){
       chatOpen=!chatOpen;
       document.getElementById('as-chat').style.display=chatOpen?'flex':'none';
-      document.getElementById('as-chat-btn').style.background=chatOpen?'rgba(168,85,247,0.5)':'rgba(168,85,247,0.2)';
+      document.getElementById('as-chat-btn').style.background=chatOpen?'rgba(16,185,129,0.5)':'rgba(16,185,129,0.2)';
     };
     document.getElementById('as-send').onclick=sendChat;
     document.getElementById('as-input').onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();sendChat();}};
@@ -226,7 +226,7 @@
     var html='';
     messages.slice(-40).forEach(function(m){
       var isMe=m.userId===USER||m.username===USER;
-      var c=isMe?'#a855f7':'#22d3ee';
+      var c=isMe?'#10b981':'#06b6d4';
       var name=m.displayName||m.username||'?';
       html+='<div style="margin-bottom:6px;line-height:1.4;">'
         +'<span style="color:'+c+';font-weight:600;font-size:11px;">'+name+'</span> '
