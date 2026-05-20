@@ -36,7 +36,7 @@ function formatRoom(room) {
     maxMembers: 10, memberCount: room.members.size,
     createdAt: room.createdAt, currentAnime: null, tags: [],
     members: [...room.members.entries()].map(([userId, m]) => ({
-      userId, username: m.username, displayName: m.username, avatarUrl: null,
+      userId, username: m.username, displayName: m.username, avatar: m.avatar || null,
       role: m.role, joinedAt: m.joinedAt,
       presence: { isConnected: true, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
     })),
@@ -81,7 +81,7 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 1e6,
 });
 
-// Auth: just username
+// Auth: username + avatar
 io.use((socket, next) => {
   const username = socket.handshake.auth?.username;
   if (!username || typeof username !== 'string' || username.trim().length < 1) {
@@ -89,6 +89,7 @@ io.use((socket, next) => {
   }
   socket.userId = username.trim();
   socket.username = username.trim();
+  socket.avatar = socket.handshake.auth?.avatar || null;
   next();
 });
 
@@ -108,7 +109,7 @@ io.on('connection', (socket) => {
     const room = {
       id, code, name: (data.name || 'Oda').trim().slice(0, 50),
       hostId: userId,
-      members: new Map([[userId, { username, role: 'host', joinedAt: new Date().toISOString() }]]),
+      members: new Map([[userId, { username, avatar: socket.avatar, role: 'host', joinedAt: new Date().toISOString() }]]),
       syncState: { isPlaying: false, currentTime: 0, playbackSpeed: 1, generation: 0, lastEventAt: Date.now() },
       currentUrl: null,
       createdAt: new Date().toISOString(),
@@ -128,13 +129,13 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (room.members.size >= 10) { cb({ success: false, error: 'Oda dolu' }); return; }
 
-    room.members.set(userId, { username, role: 'viewer', joinedAt: new Date().toISOString() });
+    room.members.set(userId, { username, avatar: socket.avatar, role: 'viewer', joinedAt: new Date().toISOString() });
     socket.join(roomId);
     socket.roomId = roomId;
 
     socket.to(roomId).emit('room:member-joined', {
       member: {
-        userId, username, displayName: username, avatarUrl: null,
+        userId, username, displayName: username, avatar: socket.avatar || null,
         role: 'viewer', joinedAt: new Date().toISOString(),
         presence: { isConnected: true, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
       },
