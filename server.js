@@ -149,6 +149,7 @@ io.on('connection', (socket) => {
 
   // ── Sync Events ──
   socket.on('sync:play', (data) => {
+    console.log(`[Sync] PLAY from ${userId} at ${data.time}s in room ${data.roomId}`);
     const room = rooms.get(data.roomId);
     if (!room) return;
     room.syncState.isPlaying = true;
@@ -162,6 +163,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sync:pause', (data) => {
+    console.log(`[Sync] PAUSE from ${userId} at ${data.time}s`);
     const room = rooms.get(data.roomId);
     if (!room) return;
     room.syncState.isPlaying = false;
@@ -175,6 +177,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sync:seek', (data) => {
+    console.log(`[Sync] SEEK from ${userId} to ${data.time}s`);
     const room = rooms.get(data.roomId);
     if (!room) return;
     room.syncState.currentTime = data.time;
