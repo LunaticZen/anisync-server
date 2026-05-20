@@ -255,6 +255,20 @@ io.on('connection', (socket) => {
     });
   });
 
+  // ── Avatar Update (live broadcast) ──
+  socket.on('user:update-avatar', (data) => {
+    const newAvatar = data?.avatar || null;
+    socket.avatar = newAvatar;
+    // Update in all rooms this user is in
+    for (const [roomId, room] of rooms.entries()) {
+      const member = room.members.get(userId);
+      if (member) {
+        member.avatar = newAvatar;
+        socket.to(roomId).emit('user:avatar-changed', { userId, avatar: newAvatar });
+      }
+    }
+  });
+
   // ── Disconnect ──
   socket.on('disconnect', () => {
     console.log(`[WS] Disconnected: ${username}`);
