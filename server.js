@@ -19,6 +19,11 @@ const rooms = new Map();
 const codeToId = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
+// Grace period: track disconnected users who might reconnect
+// Key: `${roomId}:${userId}`, Value: { timeout, room, memberData }
+const disconnectTimers = new Map();
+const DISCONNECT_GRACE_MS = 30000; // 30 seconds grace period
+
 function genCode(len = 6) {
   let c = '';
   for (let i = 0; i < len; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
@@ -39,7 +44,7 @@ function formatRoom(room) {
     members: [...room.members.entries()].map(([userId, m]) => ({
       userId, username: m.username, displayName: m.username, avatar: m.avatar || null,
       role: m.role, joinedAt: m.joinedAt,
-      presence: { isConnected: true, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
+      presence: { isConnected: !m.disconnected, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
     })),
     settings: {
       syncMode: 'host-authority', allowGuestControl: false,
@@ -130,6 +135,31 @@ io.on('connection', (socket) => {
     const roomId = codeToId.get((data.code || '').toUpperCase());
     if (!roomId || !rooms.has(roomId)) { cb({ success: false, error: 'Oda bulunamadı' }); return; }
     const room = rooms.get(roomId);
+
+    // Check if this user is reconnecting (cancel grace period timer)
+    const graceKey = `${roomId}:${userId}`;
+    if (disconnectTimers.has(graceKey)) {
+      clearTimeout(disconnectTimers.get(graceKey).timeout);
+      disconnectTimers.delete(graceKey);
+      console.log(`[Room] ${username} reconnected within grace period`);
+    }
+
+    // If user is already in the room (reconnect), just update socket
+    if (room.members.has(userId)) {
+      const existingMember = room.members.get(userId);
+      existingMember.avatar = socket.avatar || existingMember.avatar;
+      existingMember.disconnected = false;
+      socket.join(roomId);
+      socket.roomId = roomId;
+      // Notify others that this user is back online
+      socket.to(roomId).emit('room:member-reconnected', {
+        userId, username, avatar: existingMember.avatar,
+      });
+      console.log(`[Room] ${username} rejoined ${room.name} (same user)`);
+      cb({ success: true, room: formatRoom(room), syncState: room.syncState, currentUrl: room.currentUrl });
+      return;
+    }
+
     if (room.members.size >= 10) { cb({ success: false, error: 'Oda dolu' }); return; }
 
     room.members.set(userId, { username, avatar: socket.avatar, role: 'viewer', joinedAt: new Date().toISOString() });
@@ -148,12 +178,57 @@ io.on('connection', (socket) => {
     cb({ success: true, room: formatRoom(room), syncState: room.syncState, currentUrl: room.currentUrl });
   });
 
+  // ── Room Rejoin (after reconnect) ──
+  socket.on('room:rejoin', (data, cb) => {
+    const roomId = data.roomId;
+    if (!roomId || !rooms.has(roomId)) {
+      cb({ success: false, error: 'Oda bulunamadı' });
+      return;
+    }
+    const room = rooms.get(roomId);
+
+    // Cancel any pending disconnect timer
+    const graceKey = `${roomId}:${userId}`;
+    if (disconnectTimers.has(graceKey)) {
+      clearTimeout(disconnectTimers.get(graceKey).timeout);
+      disconnectTimers.delete(graceKey);
+      console.log(`[Room] ${username} rejoin cancelled grace timer`);
+    }
+
+    // If user is still in room members
+    if (room.members.has(userId)) {
+      const member = room.members.get(userId);
+      member.disconnected = false;
+      member.avatar = socket.avatar || member.avatar;
+      socket.join(roomId);
+      socket.roomId = roomId;
+      // Broadcast reconnection to others
+      socket.to(roomId).emit('room:member-reconnected', { userId, username, avatar: member.avatar });
+      console.log(`[Room] ${username} rejoined ${room.name} (still member)`);
+      cb({ success: true, room: formatRoom(room), syncState: room.syncState, currentUrl: room.currentUrl });
+    } else {
+      // User was fully removed, rejoin as new member
+      if (room.members.size >= 10) { cb({ success: false, error: 'Oda dolu' }); return; }
+      room.members.set(userId, { username, avatar: socket.avatar, role: 'viewer', joinedAt: new Date().toISOString() });
+      socket.join(roomId);
+      socket.roomId = roomId;
+      socket.to(roomId).emit('room:member-joined', {
+        member: {
+          userId, username, displayName: username, avatar: socket.avatar || null,
+          role: 'viewer', joinedAt: new Date().toISOString(),
+          presence: { isConnected: true, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
+        },
+      });
+      console.log(`[Room] ${username} rejoined ${room.name} (as new member)`);
+      cb({ success: true, room: formatRoom(room), syncState: room.syncState, currentUrl: room.currentUrl });
+    }
+  });
+
   // ── Room Leave ──
-  socket.on('room:leave', () => handleLeave(socket));
+  socket.on('room:leave', () => handleLeave(socket, false));
 
   // ── Sync Events ──
   socket.on('sync:play', (data) => {
-    console.log(`[Sync] PLAY from ${userId} at ${data.time}s in room ${data.roomId}`);
     const room = rooms.get(data.roomId);
     if (!room) return;
     room.syncState.isPlaying = true;
@@ -167,7 +242,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sync:pause', (data) => {
-    console.log(`[Sync] PAUSE from ${userId} at ${data.time}s`);
     const room = rooms.get(data.roomId);
     if (!room) return;
     room.syncState.isPlaying = false;
@@ -181,7 +255,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sync:seek', (data) => {
-    console.log(`[Sync] SEEK from ${userId} to ${data.time}s`);
     const room = rooms.get(data.roomId);
     if (!room) return;
     room.syncState.currentTime = data.time;
@@ -217,11 +290,10 @@ io.on('connection', (socket) => {
     });
   });
 
-  // ── Polling Sync (time correction every 3s) ──
+  // ── Polling Sync (time correction) ──
   socket.on('sync:timecheck', (data) => {
     const room = rooms.get(data.roomId);
     if (!room) return;
-    // Broadcast to all OTHER members for drift correction
     socket.to(data.roomId).emit('sync:timecheck', {
       time: data.time,
       playing: data.playing,
@@ -236,6 +308,7 @@ io.on('connection', (socket) => {
       id: genId(), roomId: data.roomId, userId, username, displayName: username,
       avatarUrl: null, text: (data.text || '').slice(0, 500), type: data.type || 'text',
       reactions: [], createdAt: new Date().toISOString(), editedAt: null,
+      timestamp: Date.now(),
     };
     io.to(data.roomId).emit('chat:message', msg);
   });
@@ -262,7 +335,6 @@ io.on('connection', (socket) => {
   socket.on('user:update-avatar', (data) => {
     const newAvatar = data?.avatar || null;
     socket.avatar = newAvatar;
-    // Update in all rooms this user is in
     for (const [roomId, room] of rooms.entries()) {
       const member = room.members.get(userId);
       if (member) {
@@ -272,20 +344,90 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── Disconnect ──
+  // ── Disconnect — with grace period ──
   socket.on('disconnect', () => {
     console.log(`[WS] Disconnected: ${username}`);
-    handleLeave(socket);
+    handleLeave(socket, true); // true = use grace period
   });
 });
 
-function handleLeave(socket) {
+function handleLeave(socket, useGrace = false) {
   const roomId = socket.roomId;
   if (!roomId) return;
   const room = rooms.get(roomId);
   if (!room) return;
+  const { userId, username } = socket;
 
-  room.members.delete(socket.userId);
+  // If explicit leave (user clicked Leave), remove immediately
+  if (!useGrace) {
+    performLeave(room, roomId, socket);
+    return;
+  }
+
+  // Grace period: mark user as disconnected but keep in room
+  const member = room.members.get(userId);
+  if (!member) return;
+  member.disconnected = true;
+
+  // Notify others that user went offline (but still in room)
+  socket.to(roomId).emit('presence:room-update', {
+    userId, presence: { isConnected: false, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
+  });
+
+  socket.leave(roomId);
+  socket.roomId = undefined;
+
+  // Set timer to fully remove after grace period
+  const graceKey = `${roomId}:${userId}`;
+
+  // Clear any existing timer for this user
+  if (disconnectTimers.has(graceKey)) {
+    clearTimeout(disconnectTimers.get(graceKey).timeout);
+  }
+
+  const timeout = setTimeout(() => {
+    disconnectTimers.delete(graceKey);
+    // Check if user is still disconnected (didn't reconnect)
+    const currentRoom = rooms.get(roomId);
+    if (!currentRoom) return;
+    const currentMember = currentRoom.members.get(userId);
+    if (!currentMember || !currentMember.disconnected) return;
+
+    // Actually remove the user now
+    console.log(`[Room] Grace period expired for ${username} in ${currentRoom.name}`);
+    currentRoom.members.delete(userId);
+
+    if (currentRoom.members.size === 0) {
+      rooms.delete(roomId);
+      codeToId.delete(currentRoom.code);
+      console.log(`[Room] Closed: ${currentRoom.name}`);
+    } else {
+      if (currentRoom.hostId === userId) {
+        const newHost = currentRoom.members.keys().next().value;
+        currentRoom.hostId = newHost;
+        currentRoom.members.get(newHost).role = 'host';
+        io.to(roomId).emit('room:host-transferred', { newHostId: newHost });
+      }
+      io.to(roomId).emit('room:member-left', { userId, reason: 'timeout' });
+      io.to(roomId).emit('chat:system', { text: `${username} bağlantısı koptu` });
+    }
+  }, DISCONNECT_GRACE_MS);
+
+  disconnectTimers.set(graceKey, { timeout, userId, username });
+  console.log(`[Room] ${username} disconnected, grace period ${DISCONNECT_GRACE_MS / 1000}s started`);
+}
+
+function performLeave(room, roomId, socket) {
+  const { userId, username } = socket;
+
+  // Cancel any grace timer
+  const graceKey = `${roomId}:${userId}`;
+  if (disconnectTimers.has(graceKey)) {
+    clearTimeout(disconnectTimers.get(graceKey).timeout);
+    disconnectTimers.delete(graceKey);
+  }
+
+  room.members.delete(userId);
   socket.leave(roomId);
   socket.roomId = undefined;
 
@@ -294,18 +436,18 @@ function handleLeave(socket) {
     codeToId.delete(room.code);
     console.log(`[Room] Closed: ${room.name}`);
   } else {
-    if (room.hostId === socket.userId) {
+    if (room.hostId === userId) {
       const newHost = room.members.keys().next().value;
       room.hostId = newHost;
       room.members.get(newHost).role = 'host';
       io.to(roomId).emit('room:host-transferred', { newHostId: newHost });
     }
-    socket.to(roomId).emit('room:member-left', { userId: socket.userId, reason: 'left' });
-    socket.to(roomId).emit('chat:system', { text: `${socket.username} ayrıldı` });
+    socket.to(roomId).emit('room:member-left', { userId, reason: 'left' });
+    socket.to(roomId).emit('chat:system', { text: `${username} ayrıldı` });
   }
 }
 
-// ─── Keep-Alive: Self-ping every 10 minutes ──────────────────
+// ─── Keep-Alive: Self-ping every 5 minutes ───────────────────
 
 setInterval(() => {
   const url = RENDER_URL + '/api/health';
@@ -314,12 +456,11 @@ setInterval(() => {
   }).catch(err => {
     console.log(`[Keep-Alive] Ping failed: ${err.message}`);
   });
-}, 5 * 60 * 1000); // 5 dakika (Render free tier 15dk sonra uyuyor)
+}, 5 * 60 * 1000);
 
 // ─── Cleanup stale rooms every 30 minutes ────────────────────
 
 setInterval(() => {
-  const now = Date.now();
   for (const [id, room] of rooms) {
     if (room.members.size === 0) {
       rooms.delete(id);
@@ -333,9 +474,10 @@ setInterval(() => {
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log('═══════════════════════════════════════');
-  console.log(`  AniSync Server v1.0.0`);
+  console.log(`  AniSync Server v1.1.0`);
   console.log(`  Port: ${PORT}`);
   console.log(`  URL: ${RENDER_URL}`);
+  console.log(`  Grace Period: ${DISCONNECT_GRACE_MS / 1000}s`);
   console.log(`  Keep-Alive: every 5 minutes`);
   console.log('═══════════════════════════════════════');
 });
