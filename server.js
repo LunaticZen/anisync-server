@@ -11,6 +11,7 @@ const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+const BOOT_TIME = Date.now();
 
 // ─── In-Memory State ──────────────────────────────────────────
 
@@ -68,6 +69,8 @@ app.get('/api/health', (_req, res) => {
     uptime: Math.floor(process.uptime()),
     rooms: rooms.size,
     timestamp: Date.now(),
+    bootTime: BOOT_TIME,
+    coldStartAge: Math.floor((Date.now() - BOOT_TIME) / 1000),
   });
 });
 
@@ -311,7 +314,7 @@ setInterval(() => {
   }).catch(err => {
     console.log(`[Keep-Alive] Ping failed: ${err.message}`);
   });
-}, 10 * 60 * 1000); // 10 dakika
+}, 5 * 60 * 1000); // 5 dakika (Render free tier 15dk sonra uyuyor)
 
 // ─── Cleanup stale rooms every 30 minutes ────────────────────
 
@@ -333,6 +336,6 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`  AniSync Server v1.0.0`);
   console.log(`  Port: ${PORT}`);
   console.log(`  URL: ${RENDER_URL}`);
-  console.log(`  Keep-Alive: every 10 minutes`);
+  console.log(`  Keep-Alive: every 5 minutes`);
   console.log('═══════════════════════════════════════');
 });
