@@ -24,6 +24,10 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const disconnectTimers = new Map();
 const DISCONNECT_GRACE_MS = 30000; // 30 seconds grace period
 
+// Pending join requests: users waiting for host approval
+// Key: `${roomId}:${userId}`, Value: { userId, username, avatar, socketId, timestamp }
+const pendingJoins = new Map();
+
 function genCode(len = 6) {
   let c = '';
   for (let i = 0; i < len; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
@@ -321,14 +325,147 @@ io.on('connection', (socket) => {
   socket.on('rooms:discover', (_data, cb) => {
     const publicRooms = [...rooms.values()].filter(r => r.members.size > 0);
     cb({
-      rooms: publicRooms.map(r => ({
-        id: r.id, code: r.code, name: r.name, isPublic: true,
-        hasPassword: false, hostId: r.hostId, maxMembers: 10,
-        memberCount: r.members.size, createdAt: r.createdAt,
-        currentAnime: null, tags: [], hostName: r.hostId,
-      })),
+      rooms: publicRooms.map(r => {
+        // Collect member avatars (first 5)
+        const memberAvatars = [];
+        for (const [uid, m] of r.members) {
+          if (m.avatar) memberAvatars.push(m.avatar);
+          if (memberAvatars.length >= 5) break;
+        }
+        // Count pending requests for this room
+        let pendingCount = 0;
+        for (const key of pendingJoins.keys()) {
+          if (key.startsWith(r.id + ':')) pendingCount++;
+        }
+        const hostMember = r.members.get(r.hostId);
+        return {
+          id: r.id, code: r.code, name: r.name, isPublic: true,
+          hasPassword: false, hostId: r.hostId, maxMembers: 10,
+          memberCount: r.members.size, createdAt: r.createdAt,
+          currentAnime: null, tags: [], hostName: r.hostId,
+          hostAvatar: hostMember?.avatar || null,
+          memberAvatars,
+          pendingCount,
+        };
+      }),
       total: publicRooms.length, page: 1, hasMore: false,
     });
+  });
+
+  // ── Join Request (approval system for ongoing rooms) ──
+  socket.on('room:request-join', (data, cb) => {
+    const roomId = data.roomId;
+    if (!roomId || !rooms.has(roomId)) {
+      if (cb) cb({ success: false, error: 'Oda bulunamadı' });
+      return;
+    }
+    const room = rooms.get(roomId);
+    if (room.members.size >= 10) {
+      if (cb) cb({ success: false, error: 'Oda dolu' });
+      return;
+    }
+    // Already a member?
+    if (room.members.has(userId)) {
+      if (cb) cb({ success: false, error: 'Zaten bu odadasın' });
+      return;
+    }
+    const pendingKey = `${roomId}:${userId}`;
+    // Already pending?
+    if (pendingJoins.has(pendingKey)) {
+      if (cb) cb({ success: true, status: 'already_pending' });
+      return;
+    }
+    // Store pending request
+    pendingJoins.set(pendingKey, {
+      userId, username, avatar: socket.avatar,
+      socketId: socket.id, roomId, timestamp: Date.now(),
+    });
+    // Notify host
+    const hostSockets = [...io.sockets.sockets.values()].filter(s => s.userId === room.hostId && s.roomId === roomId);
+    for (const hs of hostSockets) {
+      hs.emit('room:join-request', {
+        userId, username, avatar: socket.avatar,
+        roomId, roomName: room.name, timestamp: Date.now(),
+      });
+    }
+    console.log(`[Room] ${username} requested to join ${room.name}`);
+    if (cb) cb({ success: true, status: 'pending', roomName: room.name, hostName: room.hostId });
+  });
+
+  // ── Approve Join Request (host only) ──
+  socket.on('room:approve-join', (data) => {
+    const roomId = data.roomId;
+    const targetUserId = data.userId;
+    if (!roomId || !rooms.has(roomId)) return;
+    const room = rooms.get(roomId);
+    if (room.hostId !== userId) return; // Only host can approve
+    const pendingKey = `${roomId}:${targetUserId}`;
+    const pending = pendingJoins.get(pendingKey);
+    if (!pending) return;
+    pendingJoins.delete(pendingKey);
+    // Find the pending user's socket
+    const targetSocket = io.sockets.sockets.get(pending.socketId);
+    if (!targetSocket || !targetSocket.connected) {
+      console.log(`[Room] Approved ${pending.username} but they disconnected`);
+      return;
+    }
+    // Add to room
+    room.members.set(targetUserId, {
+      username: pending.username, avatar: pending.avatar,
+      role: 'viewer', joinedAt: new Date().toISOString(),
+    });
+    targetSocket.join(roomId);
+    targetSocket.roomId = roomId;
+    // Notify the approved user
+    targetSocket.emit('room:join-approved', {
+      room: formatRoom(room), syncState: room.syncState, currentUrl: room.currentUrl,
+    });
+    // Notify room members
+    targetSocket.to(roomId).emit('room:member-joined', {
+      member: {
+        userId: targetUserId, username: pending.username, displayName: pending.username,
+        avatar: pending.avatar || null, role: 'viewer', joinedAt: new Date().toISOString(),
+        presence: { isConnected: true, isBuffering: false, currentTime: 0, lastHeartbeat: Date.now() },
+      },
+    });
+    io.to(roomId).emit('chat:system', { text: `${pending.username} odaya katıldı` });
+    console.log(`[Room] ${pending.username} approved to join ${room.name} by ${username}`);
+  });
+
+  // ── Reject Join Request (host only) ──
+  socket.on('room:reject-join', (data) => {
+    const roomId = data.roomId;
+    const targetUserId = data.userId;
+    if (!roomId || !rooms.has(roomId)) return;
+    const room = rooms.get(roomId);
+    if (room.hostId !== userId) return;
+    const pendingKey = `${roomId}:${targetUserId}`;
+    const pending = pendingJoins.get(pendingKey);
+    if (!pending) return;
+    pendingJoins.delete(pendingKey);
+    // Notify the rejected user
+    const targetSocket = io.sockets.sockets.get(pending.socketId);
+    if (targetSocket && targetSocket.connected) {
+      targetSocket.emit('room:join-rejected', { roomId, roomName: room.name, reason: 'Host tarafından reddedildi' });
+    }
+    console.log(`[Room] ${pending.username} rejected from ${room.name} by ${username}`);
+  });
+
+  // ── Cancel Join Request (requester cancels) ──
+  socket.on('room:cancel-request', (data) => {
+    const pendingKey = `${data.roomId}:${userId}`;
+    if (pendingJoins.has(pendingKey)) {
+      pendingJoins.delete(pendingKey);
+      // Notify host that request was cancelled
+      const room = rooms.get(data.roomId);
+      if (room) {
+        const hostSockets = [...io.sockets.sockets.values()].filter(s => s.userId === room.hostId && s.roomId === data.roomId);
+        for (const hs of hostSockets) {
+          hs.emit('room:request-cancelled', { userId, username });
+        }
+      }
+      console.log(`[Room] ${username} cancelled join request`);
+    }
   });
 
   // ── Avatar Update (live broadcast) ──
@@ -342,6 +479,15 @@ io.on('connection', (socket) => {
         socket.to(roomId).emit('user:avatar-changed', { userId, avatar: newAvatar });
       }
     }
+  });
+
+  // ── Username Update ──
+  socket.on('user:update-username', (data) => {
+    const newUsername = (data?.username || '').trim().slice(0, 20);
+    if (!newUsername) return;
+    socket.username = newUsername;
+    // Note: userId stays the same (original username), but display can change
+    console.log(`[User] ${username} display name changed to ${newUsername}`);
   });
 
   // ── Disconnect — with grace period ──
