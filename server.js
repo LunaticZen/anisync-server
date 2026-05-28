@@ -45,6 +45,7 @@ function formatRoom(room) {
     isPublic: true, hasPassword: false, hostId: room.hostId,
     maxMembers: 10, memberCount: room.members.size,
     createdAt: room.createdAt, currentAnime: null, tags: [],
+    theme: room.theme || 'night',
     members: [...room.members.entries()].map(([userId, m]) => ({
       userId, username: m.username, displayName: m.username, avatar: m.avatar || null,
       role: m.role, joinedAt: m.joinedAt,
@@ -109,6 +110,16 @@ io.on('connection', (socket) => {
   const { userId, username } = socket;
   console.log(`[WS] Connected: ${username} (${socket.id})`);
 
+  // ── Duplicate Socket Prevention ──
+  // If same userId connects with a new socket, disconnect old ones
+  for (const [id, existingSocket] of io.sockets.sockets) {
+    if (id !== socket.id && existingSocket.userId === userId && existingSocket.connected) {
+      console.log(`[WS] Disconnecting duplicate socket for ${username}: ${id}`);
+      existingSocket.roomId = undefined; // Prevent handleLeave from triggering grace period
+      existingSocket.disconnect(true);
+    }
+  }
+
   // ── Time Sync ──
   socket.on('time:ping', (data, cb) => {
     if (cb) cb({ clientSendTime: data.clientSendTime, serverTime: Date.now(), serverSendTime: Date.now() });
@@ -124,6 +135,7 @@ io.on('connection', (socket) => {
       members: new Map([[userId, { username, avatar: socket.avatar, role: 'host', joinedAt: new Date().toISOString() }]]),
       syncState: { isPlaying: false, currentTime: 0, playbackSpeed: 1, generation: 0, lastEventAt: Date.now() },
       currentUrl: null,
+      theme: 'night', // Default theme
       createdAt: new Date().toISOString(),
     };
     rooms.set(id, room);
@@ -488,6 +500,16 @@ io.on('connection', (socket) => {
     socket.username = newUsername;
     // Note: userId stays the same (original username), but display can change
     console.log(`[User] ${username} display name changed to ${newUsername}`);
+  });
+
+  // ── Room Theme ──
+  socket.on('room:set-theme', (data) => {
+    const room = rooms.get(data.roomId);
+    if (!room) return;
+    if (!room.members.has(userId)) return; // Must be member
+    room.theme = data.themeId || 'night';
+    io.to(data.roomId).emit('room:theme-changed', { themeId: room.theme, changedBy: username });
+    console.log(`[Room] Theme changed to '${room.theme}' in ${room.name} by ${username}`);
   });
 
   // ── Disconnect — with grace period ──
