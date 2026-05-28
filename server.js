@@ -22,7 +22,7 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 // Grace period: track disconnected users who might reconnect
 // Key: `${roomId}:${userId}`, Value: { timeout, room, memberData }
 const disconnectTimers = new Map();
-const DISCONNECT_GRACE_MS = 30000; // 30 seconds grace period
+const DISCONNECT_GRACE_MS = 5000; // 5 seconds grace period
 
 // Pending join requests: users waiting for host approval
 // Key: `${roomId}:${userId}`, Value: { userId, username, avatar, socketId, timestamp }
