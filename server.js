@@ -120,6 +120,38 @@ io.on('connection', (socket) => {
     }
   }
 
+  // ── Clean up stale disconnected memberships for this user ──
+  // If user reconnects after app was killed, cancel grace timers and remove
+  // disconnected memberships so they can rejoin cleanly
+  for (const [graceKey, timer] of disconnectTimers) {
+    if (graceKey.endsWith(':' + userId)) {
+      clearTimeout(timer.timeout);
+      disconnectTimers.delete(graceKey);
+      const roomId = graceKey.split(':')[0];
+      const room = rooms.get(roomId);
+      if (room && room.members.has(userId)) {
+        const member = room.members.get(userId);
+        if (member.disconnected) {
+          room.members.delete(userId);
+          console.log(`[Room] Cleaned up stale membership for ${username} in ${room.name}`);
+          if (room.members.size === 0) {
+            rooms.delete(roomId);
+            codeToId.delete(room.code);
+            console.log(`[Room] Closed empty: ${room.name}`);
+          } else {
+            if (room.hostId === userId) {
+              const newHost = room.members.keys().next().value;
+              room.hostId = newHost;
+              room.members.get(newHost).role = 'host';
+              io.to(roomId).emit('room:host-transferred', { newHostId: newHost });
+            }
+            io.to(roomId).emit('room:member-left', { userId, reason: 'reconnect-cleanup' });
+          }
+        }
+      }
+    }
+  }
+
   // ── Time Sync ──
   socket.on('time:ping', (data, cb) => {
     if (cb) cb({ clientSendTime: data.clientSendTime, serverTime: Date.now(), serverSendTime: Date.now() });
